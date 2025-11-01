@@ -3,18 +3,6 @@ name: RDP
 on:
   workflow_dispatch:
 
-permissions:
-  contents: write
-  issues: write
-  pull-requests: write
-  deployments: write
-  packages: write
-  actions: write
-  checks: write
-  statuses: write
-  security-events: write
-  id-token: write
-
 jobs:
   secure-rdp:
     runs-on: windows-latest
@@ -31,28 +19,27 @@ jobs:
                              -Name "SecurityLayer" -Value 0 -Force
 
           netsh advfirewall firewall delete rule name="RDP-Tailscale"
+          
           netsh advfirewall firewall add rule name="RDP-Tailscale" `
             dir=in action=allow protocol=TCP localport=3389
 
           Restart-Service -Name TermService -Force
 
-      - name: Create RDP User
+      - name: Create RDP User with Fixed Credentials
         run: |
           $username = "AHMAD"
           $password = "FreeRdp@123"
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          
-          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires -PasswordNeverExpires
+          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member $username
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
           
-          echo "RDP_USERNAME=$username" >> $env:GITHUB_ENV
-          echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
-
-      - name: Quick Permissions Setup
-        run: |
-          Set-ExecutionPolicy Unrestricted -Scope LocalMachine -Force
-          Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
+          echo "RDP_CREDS=User: $username | Password: $password" >> $env:GITHUB_ENV
+          
+          if (-not (Get-LocalUser -Name $username)) {
+              Write-Error "User creation failed"
+              exit 1
+          }
 
       - name: Install Tailscale
         run: |
@@ -94,13 +81,13 @@ jobs:
 
       - name: Maintain Connection
         run: |
-          Write-Host "`n=== RDP CONNECTION ==="
-          Write-Host "IP: $env:TAILSCALE_IP"
+          Write-Host "`n=== RDP ACCESS ==="
+          Write-Host "Address: $env:TAILSCALE_IP"
           Write-Host "Username: AHMAD"
           Write-Host "Password: FreeRdp@123"
-          Write-Host "=====================`n"
+          Write-Host "==================`n"
           
           while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active"
+              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
               Start-Sleep -Seconds 300
           }
