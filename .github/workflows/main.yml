@@ -3,18 +3,6 @@ name: RDP
 on:
   workflow_dispatch:
 
-permissions:
-  contents: write
-  issues: write
-  pull-requests: write
-  deployments: write
-  packages: write
-  actions: write
-  checks: write
-  statuses: write
-  security-events: write
-  id-token: write
-
 jobs:
   secure-rdp:
     runs-on: windows-latest
@@ -23,6 +11,7 @@ jobs:
     steps:
       - name: Configure Core RDP Settings
         run: |
+          # Enable Remote Desktop and disable Network Level Authentication (if needed)
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
                              -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
@@ -30,50 +19,31 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
                              -Name "SecurityLayer" -Value 0 -Force
 
+          # Remove any existing rule with the same name to avoid duplication
           netsh advfirewall firewall delete rule name="RDP-Tailscale"
           
+          # For testing, allow any incoming connection on port 3389
           netsh advfirewall firewall add rule name="RDP-Tailscale" `
             dir=in action=allow protocol=TCP localport=3389
 
+          # (Optional) Restart the Remote Desktop service to ensure changes take effect
           Restart-Service -Name TermService -Force
 
-      - name: Create RDP User with Fixed Credentials
+      - name: Create RDP User with Secure Password
         run: |
           $username = "AHMAD"
           $password = "FreeRdp@123"
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires -PasswordNeverExpires
+          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member $username
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
           
-          echo "RDP_USERNAME=$username" >> $env:GITHUB_ENV
-          echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
+          echo "RDP_CREDS=User: $username | Password: $password" >> $env:GITHUB_ENV
           
           if (-not (Get-LocalUser -Name $username)) {
               Write-Error "User creation failed"
               exit 1
           }
-
-      - name: Grant Permissions (Fast)
-        run: |
-          # Set execution policy only (no UAC changes that hang)
-          Set-ExecutionPolicy Unrestricted -Scope LocalMachine -Force
-          Write-Host "✓ Execution policy set to unrestricted"
-          
-          # Try to disable Defender (may not work, but won't hang)
-          try {
-            Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
-            Write-Host "✓ Windows Defender configuration attempted"
-          } catch {
-            Write-Host "⚠ Defender unchanged"
-          }
-
-      - name: Install Chocolatey
-        run: |
-          Set-ExecutionPolicy Bypass -Scope Process -Force
-          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-          iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-          choco --version
 
       - name: Install Tailscale
         run: |
@@ -86,8 +56,10 @@ jobs:
 
       - name: Establish Tailscale Connection
         run: |
+          # Bring up Tailscale with the provided auth key and set a unique hostname
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
           
+          # Wait for Tailscale to assign an IP
           $tsIP = $null
           $retries = 0
           while (-not $tsIP -and $retries -lt 10) {
@@ -106,6 +78,7 @@ jobs:
         run: |
           Write-Host "Tailscale IP: $env:TAILSCALE_IP"
           
+          # Test connectivity using Test-NetConnection against the Tailscale IP on port 3389
           $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
           if (-not $testResult.TcpTestSucceeded) {
               Write-Error "TCP connection to RDP port 3389 failed"
@@ -115,22 +88,14 @@ jobs:
 
       - name: Maintain Connection
         run: |
-          Write-Host "`n======================================="
-          Write-Host "       RDP CONNECTION READY"
-          Write-Host "======================================="
-          Write-Host "IP Address: $env:TAILSCALE_IP"
+          Write-Host "`n=== RDP ACCESS ==="
+          Write-Host "Address: $env:TAILSCALE_IP"
           Write-Host "Username: AHMAD"
           Write-Host "Password: FreeRdp@123"
-          Write-Host ""
-          Write-Host "PERMISSIONS:"
-          Write-Host "  ✓ Administrator Access"
-          Write-Host "  ✓ Unrestricted Script Execution"
-          Write-Host "  ✓ Chocolatey Package Manager"
-          Write-Host "  ✓ All GitHub Workflow Permissions"
-          Write-Host "======================================="
-          Write-Host ""
+          Write-Host "==================`n"
           
+          # Keep runner active indefinitely (or until manually cancelled)
           while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active"
+              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
               Start-Sleep -Seconds 300
           }
