@@ -66,46 +66,63 @@ jobs:
           Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
           Remove-Item $installerPath -Force
 
-      - name: Establish Tailscale Connection with Static IP Check
+      - name: Establish Tailscale Connection with Retry Logic
         run: |
           $desiredIP = "100.122.195.36"
+          $maxRetries = 5
+          $retryCount = 0
+          $connected = $false
           
-          # Bring up Tailscale with fixed hostname for consistent IP assignment
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-rdp --accept-routes
-          
-          # Wait for Tailscale to assign an IP
-          $tsIP = $null
-          $retries = 0
-          while (-not $tsIP -and $retries -lt 10) {
-              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-              Start-Sleep -Seconds 5
-              $retries++
+          while (-not $connected -and $retryCount -lt $maxRetries) {
+              Write-Host "`n=== Connection Attempt $($retryCount + 1) of $maxRetries ==="
+              
+              # Bring up Tailscale with fixed hostname and force reauth
+              & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
+                --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
+                --hostname=gh-runner-rdp `
+                --accept-routes `
+                --force-reauth `
+                --reset
+              
+              # Wait for Tailscale to assign an IP
+              $tsIP = $null
+              $ipRetries = 0
+              while (-not $tsIP -and $ipRetries -lt 10) {
+                  Start-Sleep -Seconds 5
+                  $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+                  $ipRetries++
+              }
+              
+              if (-not $tsIP) {
+                  Write-Host "Failed to get IP on attempt $($retryCount + 1)"
+                  $retryCount++
+                  Start-Sleep -Seconds 10
+                  continue
+              }
+              
+              # Trim any whitespace from the IP
+              $tsIP = $tsIP.Trim()
+              
+              Write-Host "Assigned IP: $tsIP"
+              Write-Host "Desired IP: $desiredIP"
+              
+              # Check if the assigned IP matches the desired static IP
+              if ($tsIP -eq $desiredIP) {
+                  Write-Host "SUCCESS: Got the desired static IP: $desiredIP"
+                  echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+                  $connected = $true
+              } else {
+                  Write-Host "IP mismatch. Disconnecting and retrying..."
+                  & "$env:ProgramFiles\Tailscale\tailscale.exe" down
+                  $retryCount++
+                  Start-Sleep -Seconds 10
+              }
           }
           
-          if (-not $tsIP) {
-              Write-Error "Tailscale IP not assigned. Exiting."
+          if (-not $connected) {
+              Write-Error "Failed to get desired IP after $maxRetries attempts. Please check Tailscale Admin Console."
               exit 1
           }
-          
-          # Trim any whitespace from the IP
-          $tsIP = $tsIP.Trim()
-          
-          Write-Host "Connected to Tailscale network"
-          Write-Host "Hostname: gh-runner-rdp"
-          Write-Host "Assigned IP: $tsIP"
-          Write-Host "Desired IP: $desiredIP"
-          
-          # Check if the assigned IP matches the desired static IP
-          if ($tsIP -ne $desiredIP) {
-              Write-Host "WARNING: Assigned IP ($tsIP) does not match desired IP ($desiredIP)"
-              Write-Host "Disconnecting and failing workflow to trigger restart..."
-              & "$env:ProgramFiles\Tailscale\tailscale.exe" down
-              Write-Error "IP mismatch. Workflow will restart to try again."
-              exit 1
-          }
-          
-          Write-Host "SUCCESS: Got the desired static IP: $desiredIP"
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
       
       - name: Verify RDP Accessibility
         run: |
