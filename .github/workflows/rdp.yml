@@ -66,8 +66,10 @@ jobs:
           Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
           Remove-Item $installerPath -Force
 
-      - name: Establish Tailscale Connection
+      - name: Establish Tailscale Connection with Static IP Check
         run: |
+          $desiredIP = "100.122.195.36"
+          
           # Bring up Tailscale with fixed hostname for consistent IP assignment
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-rdp --accept-routes
           
@@ -84,11 +86,26 @@ jobs:
               Write-Error "Tailscale IP not assigned. Exiting."
               exit 1
           }
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+          
+          # Trim any whitespace from the IP
+          $tsIP = $tsIP.Trim()
           
           Write-Host "Connected to Tailscale network"
           Write-Host "Hostname: gh-runner-rdp"
           Write-Host "Assigned IP: $tsIP"
+          Write-Host "Desired IP: $desiredIP"
+          
+          # Check if the assigned IP matches the desired static IP
+          if ($tsIP -ne $desiredIP) {
+              Write-Host "WARNING: Assigned IP ($tsIP) does not match desired IP ($desiredIP)"
+              Write-Host "Disconnecting and failing workflow to trigger restart..."
+              & "$env:ProgramFiles\Tailscale\tailscale.exe" down
+              Write-Error "IP mismatch. Workflow will restart to try again."
+              exit 1
+          }
+          
+          Write-Host "SUCCESS: Got the desired static IP: $desiredIP"
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
       
       - name: Verify RDP Accessibility
         run: |
@@ -106,7 +123,7 @@ jobs:
         run: |
           Write-Host "`n=== RDP ACCESS ==="
           Write-Host "Hostname: gh-runner-rdp"
-          Write-Host "Address: $env:TAILSCALE_IP"
+          Write-Host "Address: $env:TAILSCALE_IP (Static IP)"
           Write-Host "Username: RDP"
           Write-Host "Password: $(echo $env:RDP_CREDS)"
           Write-Host "==================`n"
