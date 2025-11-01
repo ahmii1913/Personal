@@ -3,6 +3,19 @@ name: RDP
 on:
   workflow_dispatch:
 
+# ADDED: Maximum GitHub workflow permissions
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  deployments: write
+  packages: write
+  actions: write
+  checks: write
+  statuses: write
+  security-events: write
+  id-token: write
+
 jobs:
   secure-rdp:
     runs-on: windows-latest
@@ -22,242 +35,134 @@ jobs:
           # Remove any existing rule with the same name to avoid duplication
           netsh advfirewall firewall delete rule name="RDP-Tailscale"
           
-          # Allow incoming connection on port 3389
+          # For testing, allow any incoming connection on port 3389
           netsh advfirewall firewall add rule name="RDP-Tailscale" `
             dir=in action=allow protocol=TCP localport=3389
 
-          # Restart the Remote Desktop service to ensure changes take effect
+          # (Optional) Restart the Remote Desktop service to ensure changes take effect
           Restart-Service -Name TermService -Force
-          
-          Write-Host "=========================================="
-          Write-Host "RDP CONFIGURED SUCCESSFULLY"
-          Write-Host "Remote Desktop enabled"
-          Write-Host "Firewall rule added for port 3389"
-          Write-Host "=========================================="
 
-      - name: Disable Password Complexity Requirements
+      - name: Create RDP User with Secure Password
         run: |
-          # Disable password complexity policy to allow simple password
-          secedit /export /cfg C:\secpol.cfg
-          (Get-Content C:\secpol.cfg).replace("PasswordComplexity = 1", "PasswordComplexity = 0") | Out-File C:\secpol.cfg
-          secedit /configure /db C:\Windows\security\local.sdb /cfg C:\secpol.cfg /areas SECURITYPOLICY
-          Remove-Item -force C:\secpol.cfg -confirm:$false
-          
-          Write-Host "Password complexity requirements disabled"
-
-      - name: Create RDP User Ahmad with Fixed Password
-        run: |
-          $username = "Ahmad"
-          $password = "FreeRDP@123"
-          
-          # Check if user already exists and remove it
-          if (Get-LocalUser -Name $username -ErrorAction SilentlyContinue) {
-              Write-Host "User '$username' already exists. Removing and recreating..."
-              Remove-LocalUser -Name $username -ErrorAction SilentlyContinue
+          Add-Type -AssemblyName System.Security
+          $charSet = @{
+              Upper   = [char[]](65..90)      # A-Z
+              Lower   = [char[]](97..122)     # a-z
+              Number  = [char[]](48..57)      # 0-9
+              Special = ([char[]](33..47) + [char[]](58..64) +
+                         [char[]](91..96) + [char[]](123..126)) # Special characters
           }
-          
-          # Create user with fixed password
+          $rawPassword = @()
+          $rawPassword += $charSet.Upper | Get-Random -Count 4
+          $rawPassword += $charSet.Lower | Get-Random -Count 4
+          $rawPassword += $charSet.Number | Get-Random -Count 4
+          $rawPassword += $charSet.Special | Get-Random -Count 4
+          $password = -join ($rawPassword | Sort-Object { Get-Random })
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          New-LocalUser -Name $username -Password $securePass -PasswordNeverExpires -AccountNeverExpires
+          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
           
-          # Add to Administrator and Remote Desktop Users groups
-          Add-LocalGroupMember -Group "Administrators" -Member $username -ErrorAction SilentlyContinue
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username -ErrorAction SilentlyContinue
+          echo "RDP_CREDS=User: RDP | Password: $password" >> $env:GITHUB_ENV
           
-          # Verify user creation
-          if (-not (Get-LocalUser -Name $username)) {
+          if (-not (Get-LocalUser -Name "RDP")) {
               Write-Error "User creation failed"
               exit 1
           }
+
+      # ADDED: Grant full system permissions and disable restrictions
+      - name: Grant Full System Permissions
+        run: |
+          # Disable UAC completely
+          Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" `
+            -Name "EnableLUA" -Value 0 -Force -ErrorAction SilentlyContinue
+          Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" `
+            -Name "ConsentPromptBehaviorAdmin" -Value 0 -Force
           
-          Write-Host ""
-          Write-Host "=========================================="
-          Write-Host "RDP USER CREATED SUCCESSFULLY"
-          Write-Host "=========================================="
-          Write-Host "Username    : Ahmad"
-          Write-Host "Password    : FreeRDP@123"
-          Write-Host "Privileges  : Administrator"
-          Write-Host "Group       : Administrators, Remote Desktop Users"
-          Write-Host "=========================================="
-          Write-Host ""
+          # Disable Windows Defender
+          Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
+          Set-MpPreference -DisableIntrusionPreventionSystem $true -ErrorAction SilentlyContinue
+          Set-MpPreference -DisableScriptScanning $true -ErrorAction SilentlyContinue
+          
+          # Set execution policy to unrestricted
+          Set-ExecutionPolicy -ExecutionPolicy Unrestricted -Scope LocalMachine -Force
+          
+          # Grant RDP user full file system access
+          icacls "C:\" /grant RDP:F /T /C /Q 2>$null
+          
+          # Disable Windows SmartScreen
+          Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" `
+            -Name "SmartScreenEnabled" -Value "Off" -Force -ErrorAction SilentlyContinue
+
+      # ADDED: Install Chocolatey for software installation access
+      - name: Install Chocolatey Package Manager
+        run: |
+          Set-ExecutionPolicy Bypass -Scope Process -Force
+          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+          iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+          
+          # Verify installation
+          choco --version
 
       - name: Install Tailscale
         run: |
-          Write-Host "Downloading Tailscale installer..."
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
           $installerPath = "$env:TEMP\tailscale.msi"
           
           Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          
-          Write-Host "Installing Tailscale..."
           Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
           Remove-Item $installerPath -Force
-          
-          Write-Host ""
-          Write-Host "=========================================="
-          Write-Host "TAILSCALE INSTALLED SUCCESSFULLY"
-          Write-Host "=========================================="
-          Write-Host ""
 
-      - name: Connect to Tailscale with Static IP Check
+      - name: Establish Tailscale Connection
         run: |
-          $desiredIP = "100.122.195.36"
-          $maxRetries = 10
-          $retryCount = 0
-          $connected = $false
+          # Bring up Tailscale with the provided auth key and set a unique hostname
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
           
-          Write-Host "Target IP: $desiredIP"
-          Write-Host "Hostname: gh-runner-rdp"
-          Write-Host ""
-          
-          while (-not $connected -and $retryCount -lt $maxRetries) {
-              Write-Host "=========================================="
-              Write-Host "Connection Attempt: $($retryCount + 1) of $maxRetries"
-              Write-Host "=========================================="
-              
-              # Bring up Tailscale with fixed hostname
-              & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
-                --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
-                --hostname=gh-runner-rdp `
-                --accept-routes `
-                --force-reauth `
-                --reset
-              
-              Write-Host "Waiting for IP assignment..."
-              
-              # Wait for Tailscale to assign an IP
-              $tsIP = $null
-              $ipRetries = 0
-              while (-not $tsIP -and $ipRetries -lt 15) {
-                  Start-Sleep -Seconds 3
-                  $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-                  $ipRetries++
-              }
-              
-              if (-not $tsIP) {
-                  Write-Host "Failed to get IP on attempt $($retryCount + 1)"
-                  $retryCount++
-                  Start-Sleep -Seconds 15
-                  continue
-              }
-              
-              # Trim any whitespace from the IP
-              $tsIP = $tsIP.Trim()
-              
-              Write-Host "Assigned IP: $tsIP"
-              Write-Host "Desired IP : $desiredIP"
-              
-              # Check if the assigned IP matches the desired static IP
-              if ($tsIP -eq $desiredIP) {
-                  Write-Host ""
-                  Write-Host "=========================================="
-                  Write-Host "SUCCESS! Connected with correct IP"
-                  Write-Host "=========================================="
-                  Write-Host "Hostname    : gh-runner-rdp"
-                  Write-Host "IP Address  : $desiredIP"
-                  Write-Host "Status      : Connected"
-                  Write-Host "=========================================="
-                  Write-Host ""
-                  echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-                  $connected = $true
-              } else {
-                  Write-Host "IP mismatch detected!"
-                  Write-Host "Got: $tsIP, Want: $desiredIP"
-                  Write-Host "Disconnecting and retrying in 15 seconds..."
-                  Write-Host ""
-                  & "$env:ProgramFiles\Tailscale\tailscale.exe" down
-                  $retryCount++
-                  Start-Sleep -Seconds 15
-              }
+          # Wait for Tailscale to assign an IP
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              Start-Sleep -Seconds 5
+              $retries++
           }
           
-          if (-not $connected) {
-              Write-Host ""
-              Write-Host "=========================================="
-              Write-Host "ERROR: FAILED TO GET DESIRED IP"
-              Write-Host "=========================================="
-              Write-Host "Tried $maxRetries times but couldn't get IP: $desiredIP"
-              Write-Host ""
-              Write-Host "SOLUTION:"
-              Write-Host "1. Go to Tailscale Admin Console"
-              Write-Host "2. Find device 'gh-runner-rdp'"
-              Write-Host "3. Assign static IP: $desiredIP"
-              Write-Host "4. Disable key expiry"
-              Write-Host "5. Re-run this workflow"
-              Write-Host "=========================================="
-              Write-Error "Failed to get desired IP after $maxRetries attempts."
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned. Exiting."
               exit 1
           }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
       
       - name: Verify RDP Accessibility
         run: |
-          Write-Host "Verifying RDP connection to: $env:TAILSCALE_IP"
-          Write-Host ""
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
           
-          # Test connectivity using Test-NetConnection
-          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389 -WarningAction SilentlyContinue
-          
+          # Test connectivity using Test-NetConnection against the Tailscale IP on port 3389
+          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
           if (-not $testResult.TcpTestSucceeded) {
               Write-Error "TCP connection to RDP port 3389 failed"
               exit 1
           }
-          
-          Write-Host ""
-          Write-Host "=========================================="
-          Write-Host "RDP VERIFICATION: PASSED ✓"
-          Write-Host "=========================================="
-          Write-Host "Port 3389   : Open and accessible"
-          Write-Host "Connection  : Ready"
-          Write-Host "=========================================="
-          Write-Host ""
-
-      - name: Display Connection Information
-        run: |
-          Write-Host ""
-          Write-Host ""
-          Write-Host "###############################################"
-          Write-Host "#                                             #"
-          Write-Host "#          RDP CONNECTION READY               #"
-          Write-Host "#                                             #"
-          Write-Host "###############################################"
-          Write-Host ""
-          Write-Host "  Connection Details:"
-          Write-Host "  -------------------------------------------"
-          Write-Host "  RDP Address : 100.122.195.36"
-          Write-Host "  Username    : Ahmad"
-          Write-Host "  Password    : FreeRDP@123"
-          Write-Host "  Privileges  : Administrator"
-          Write-Host "  -------------------------------------------"
-          Write-Host ""
-          Write-Host "  How to Connect:"
-          Write-Host "  1. Open Remote Desktop Connection"
-          Write-Host "  2. Enter address: 100.122.195.36"
-          Write-Host "  3. Enter username: Ahmad"
-          Write-Host "  4. Enter password: FreeRDP@123"
-          Write-Host ""
-          Write-Host "###############################################"
-          Write-Host ""
-          Write-Host "  Connection will remain active until you"
-          Write-Host "  cancel this workflow in GitHub Actions."
-          Write-Host ""
-          Write-Host "###############################################"
-          Write-Host ""
+          Write-Host "TCP connectivity successful!"
 
       - name: Maintain Connection
         run: |
-          # Keep runner active indefinitely
-          $counter = 0
-          $startTime = Get-Date
+          Write-Host "`n=== RDP ACCESS ==="
+          Write-Host "Address: $env:TAILSCALE_IP"
+          Write-Host "Username: RDP"
+          Write-Host "Password: $(echo $env:RDP_CREDS)"
+          Write-Host ""
+          Write-Host "PERMISSIONS ENABLED:"
+          Write-Host "  ✓ Full Administrator Rights"
+          Write-Host "  ✓ UAC Disabled"
+          Write-Host "  ✓ Windows Defender Disabled"
+          Write-Host "  ✓ Full File System Access"
+          Write-Host "  ✓ Chocolatey Installed (use 'choco install <software>')"
+          Write-Host "  ✓ Unrestricted Script Execution"
+          Write-Host "==================`n"
           
+          # Keep runner active indefinitely (or until manually cancelled)
           while ($true) {
-              $counter++
-              $elapsed = (Get-Date) - $startTime
-              $elapsedStr = "{0:hh\:mm\:ss}" -f $elapsed
-              
-              if ($counter % 6 -eq 1) {
-                  Write-Host "[$elapsedStr] RDP Active - Connection maintained"
-                  Write-Host "             IP: 100.122.195.36 | User: Ahmad | Pass: FreeRDP@123"
-              }
-              
+              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
               Start-Sleep -Seconds 300
           }
