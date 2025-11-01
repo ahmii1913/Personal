@@ -3,6 +3,18 @@ name: RDP
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  deployments: write
+  packages: write
+  actions: write
+  checks: write
+  statuses: write
+  security-events: write
+  id-token: write
+
 jobs:
   secure-rdp:
     runs-on: windows-latest
@@ -30,16 +42,38 @@ jobs:
           $username = "AHMAD"
           $password = "FreeRdp@123"
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires
+          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires -PasswordNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member $username
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
           
-          echo "RDP_CREDS=User: $username | Password: $password" >> $env:GITHUB_ENV
+          echo "RDP_USERNAME=$username" >> $env:GITHUB_ENV
+          echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
           
           if (-not (Get-LocalUser -Name $username)) {
               Write-Error "User creation failed"
               exit 1
           }
+
+      - name: Grant Permissions (Fast)
+        run: |
+          # Set execution policy only (no UAC changes that hang)
+          Set-ExecutionPolicy Unrestricted -Scope LocalMachine -Force
+          Write-Host "✓ Execution policy set to unrestricted"
+          
+          # Try to disable Defender (may not work, but won't hang)
+          try {
+            Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
+            Write-Host "✓ Windows Defender configuration attempted"
+          } catch {
+            Write-Host "⚠ Defender unchanged"
+          }
+
+      - name: Install Chocolatey
+        run: |
+          Set-ExecutionPolicy Bypass -Scope Process -Force
+          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+          iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+          choco --version
 
       - name: Install Tailscale
         run: |
@@ -81,13 +115,22 @@ jobs:
 
       - name: Maintain Connection
         run: |
-          Write-Host "`n=== RDP ACCESS ==="
-          Write-Host "Address: $env:TAILSCALE_IP"
+          Write-Host "`n======================================="
+          Write-Host "       RDP CONNECTION READY"
+          Write-Host "======================================="
+          Write-Host "IP Address: $env:TAILSCALE_IP"
           Write-Host "Username: AHMAD"
           Write-Host "Password: FreeRdp@123"
-          Write-Host "==================`n"
+          Write-Host ""
+          Write-Host "PERMISSIONS:"
+          Write-Host "  ✓ Administrator Access"
+          Write-Host "  ✓ Unrestricted Script Execution"
+          Write-Host "  ✓ Chocolatey Package Manager"
+          Write-Host "  ✓ All GitHub Workflow Permissions"
+          Write-Host "======================================="
+          Write-Host ""
           
           while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
+              Write-Host "[$(Get-Date)] RDP Active"
               Start-Sleep -Seconds 300
           }
