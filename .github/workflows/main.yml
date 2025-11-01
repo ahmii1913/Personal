@@ -35,10 +35,20 @@ jobs:
           Write-Host "Firewall rule added for port 3389"
           Write-Host "=========================================="
 
+      - name: Disable Password Complexity Requirements
+        run: |
+          # Disable password complexity policy to allow simple password
+          secedit /export /cfg C:\secpol.cfg
+          (Get-Content C:\secpol.cfg).replace("PasswordComplexity = 1", "PasswordComplexity = 0") | Out-File C:\secpol.cfg
+          secedit /configure /db C:\Windows\security\local.sdb /cfg C:\secpol.cfg /areas SECURITYPOLICY
+          Remove-Item -force C:\secpol.cfg -confirm:$false
+          
+          Write-Host "Password complexity requirements disabled"
+
       - name: Create RDP User Ahmad with Fixed Password
         run: |
           $username = "Ahmad"
-          $password = "freerdp123"
+          $password = "FreeRDP@123"
           
           # Check if user already exists and remove it
           if (Get-LocalUser -Name $username -ErrorAction SilentlyContinue) {
@@ -48,7 +58,7 @@ jobs:
           
           # Create user with fixed password
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires -PasswordNeverExpires
+          New-LocalUser -Name $username -Password $securePass -PasswordNeverExpires -AccountNeverExpires
           
           # Add to Administrator and Remote Desktop Users groups
           Add-LocalGroupMember -Group "Administrators" -Member $username -ErrorAction SilentlyContinue
@@ -65,7 +75,7 @@ jobs:
           Write-Host "RDP USER CREATED SUCCESSFULLY"
           Write-Host "=========================================="
           Write-Host "Username    : Ahmad"
-          Write-Host "Password    : freerdp123"
+          Write-Host "Password    : FreeRDP@123"
           Write-Host "Privileges  : Administrator"
           Write-Host "Group       : Administrators, Remote Desktop Users"
           Write-Host "=========================================="
@@ -215,7 +225,7 @@ jobs:
           Write-Host "  -------------------------------------------"
           Write-Host "  RDP Address : 100.122.195.36"
           Write-Host "  Username    : Ahmad"
-          Write-Host "  Password    : freerdp123"
+          Write-Host "  Password    : FreeRDP@123"
           Write-Host "  Privileges  : Administrator"
           Write-Host "  -------------------------------------------"
           Write-Host ""
@@ -223,7 +233,7 @@ jobs:
           Write-Host "  1. Open Remote Desktop Connection"
           Write-Host "  2. Enter address: 100.122.195.36"
           Write-Host "  3. Enter username: Ahmad"
-          Write-Host "  4. Enter password: freerdp123"
+          Write-Host "  4. Enter password: FreeRDP@123"
           Write-Host ""
           Write-Host "###############################################"
           Write-Host ""
@@ -246,7 +256,7 @@ jobs:
               
               if ($counter % 6 -eq 1) {
                   Write-Host "[$elapsedStr] RDP Active - Connection maintained"
-                  Write-Host "             IP: 100.122.195.36 | User: Ahmad | Pass: freerdp123"
+                  Write-Host "             IP: 100.122.195.36 | User: Ahmad | Pass: FreeRDP@123"
               }
               
               Start-Sleep -Seconds 300
