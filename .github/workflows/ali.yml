@@ -50,12 +50,19 @@ jobs:
           Add-LocalGroupMember -Group "Administrators" -Member "RDP"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
           
-          echo "RDP_CREDS=User: RDP | Password: $password" >> $env:GITHUB_ENV
+          echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
           
           if (-not (Get-LocalUser -Name "RDP")) {
               Write-Error "User creation failed"
               exit 1
           }
+          
+          Write-Host "=========================================="
+          Write-Host "RDP USER CREATED SUCCESSFULLY"
+          Write-Host "Username: RDP"
+          Write-Host "Password: $password"
+          Write-Host "User is Administrator: YES"
+          Write-Host "=========================================="
 
       - name: Install Tailscale
         run: |
@@ -65,6 +72,8 @@ jobs:
           Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
           Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
           Remove-Item $installerPath -Force
+          
+          Write-Host "Tailscale installed successfully"
 
       - name: Establish Tailscale Connection with Retry Logic
         run: |
@@ -108,7 +117,13 @@ jobs:
               
               # Check if the assigned IP matches the desired static IP
               if ($tsIP -eq $desiredIP) {
-                  Write-Host "SUCCESS: Got the desired static IP: $desiredIP"
+                  Write-Host ""
+                  Write-Host "=========================================="
+                  Write-Host "SUCCESS: Connected to Tailscale!"
+                  Write-Host "Hostname: gh-runner-rdp"
+                  Write-Host "IP Address: $desiredIP"
+                  Write-Host "=========================================="
+                  Write-Host ""
                   echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
                   $connected = $true
               } else {
@@ -126,7 +141,7 @@ jobs:
       
       - name: Verify RDP Accessibility
         run: |
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          Write-Host "Verifying RDP connection to: $env:TAILSCALE_IP"
           
           # Test connectivity using Test-NetConnection against the Tailscale IP on port 3389
           $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
@@ -134,19 +149,38 @@ jobs:
               Write-Error "TCP connection to RDP port 3389 failed"
               exit 1
           }
-          Write-Host "TCP connectivity successful!"
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host "RDP VERIFICATION: PASSED"
+          Write-Host "Port 3389 is accessible"
+          Write-Host "=========================================="
+          Write-Host ""
 
       - name: Maintain Connection
         run: |
-          Write-Host "`n=== RDP ACCESS ==="
-          Write-Host "Hostname: gh-runner-rdp"
-          Write-Host "Address: $env:TAILSCALE_IP (Static IP)"
-          Write-Host "Username: RDP"
-          Write-Host "Password: $(echo $env:RDP_CREDS)"
-          Write-Host "==================`n"
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host "          RDP CONNECTION READY          "
+          Write-Host "=========================================="
+          Write-Host ""
+          Write-Host "RDP Address : $env:TAILSCALE_IP"
+          Write-Host "Username    : RDP"
+          Write-Host "Password    : $env:RDP_PASSWORD"
+          Write-Host "Privileges  : Administrator"
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host "Connection will remain active."
+          Write-Host "To stop: Cancel workflow in GitHub Actions"
+          Write-Host "=========================================="
+          Write-Host ""
           
           # Keep runner active indefinitely (or until manually cancelled)
+          $counter = 0
           while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
+              $counter++
+              if ($counter % 12 -eq 1) {
+                  Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] RDP Active - Connection maintained"
+                  Write-Host "  IP: $env:TAILSCALE_IP | User: RDP | Password: $env:RDP_PASSWORD"
+              }
               Start-Sleep -Seconds 300
           }
