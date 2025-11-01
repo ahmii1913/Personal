@@ -3,7 +3,6 @@ name: RDP
 on:
   workflow_dispatch:
 
-# Maximum GitHub workflow permissions
 permissions:
   contents: write
   issues: write
@@ -24,7 +23,6 @@ jobs:
     steps:
       - name: Configure Core RDP Settings
         run: |
-          # Enable Remote Desktop and disable Network Level Authentication (if needed)
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
                              -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
@@ -32,88 +30,29 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
                              -Name "SecurityLayer" -Value 0 -Force
 
-          # Remove any existing rule with the same name to avoid duplication
           netsh advfirewall firewall delete rule name="RDP-Tailscale"
-          
-          # For testing, allow any incoming connection on port 3389
           netsh advfirewall firewall add rule name="RDP-Tailscale" `
             dir=in action=allow protocol=TCP localport=3389
 
-          # (Optional) Restart the Remote Desktop service to ensure changes take effect
           Restart-Service -Name TermService -Force
 
-      - name: Create RDP User with Fixed Credentials
+      - name: Create RDP User
         run: |
-          # Fixed credentials
           $username = "AHMAD"
           $password = "FreeRdp@123"
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
           
-          # Create user
           New-LocalUser -Name $username -Password $securePass -AccountNeverExpires -PasswordNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member $username
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
           
           echo "RDP_USERNAME=$username" >> $env:GITHUB_ENV
           echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
-          
-          if (-not (Get-LocalUser -Name $username)) {
-              Write-Error "User creation failed"
-              exit 1
-          }
-          
-          Write-Host "User '$username' created successfully with full administrator privileges"
 
-      - name: Grant Full System Permissions
+      - name: Quick Permissions Setup
         run: |
-          Write-Host "Configuring system permissions..."
-          
-          # Disable UAC completely
-          try {
-            Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" `
-              -Name "EnableLUA" -Value 0 -Force -ErrorAction Stop
-            Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" `
-              -Name "ConsentPromptBehaviorAdmin" -Value 0 -Force -ErrorAction Stop
-            Write-Host "✓ UAC disabled"
-          } catch {
-            Write-Host "⚠ UAC configuration skipped"
-          }
-          
-          # Disable Windows Defender (may fail on some runners)
-          try {
-            Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Stop
-            Write-Host "✓ Windows Defender disabled"
-          } catch {
-            Write-Host "⚠ Windows Defender configuration skipped"
-          }
-          
-          # Set execution policy to unrestricted
-          try {
-            Set-ExecutionPolicy -ExecutionPolicy Unrestricted -Scope LocalMachine -Force -ErrorAction Stop
-            Write-Host "✓ Execution policy set to unrestricted"
-          } catch {
-            Write-Host "⚠ Execution policy unchanged"
-          }
-          
-          # Disable Windows SmartScreen
-          try {
-            Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" `
-              -Name "SmartScreenEnabled" -Value "Off" -Force -ErrorAction Stop
-            Write-Host "✓ SmartScreen disabled"
-          } catch {
-            Write-Host "⚠ SmartScreen configuration skipped"
-          }
-          
-          Write-Host "Permissions configuration completed"
-
-      - name: Install Chocolatey Package Manager
-        run: |
-          Set-ExecutionPolicy Bypass -Scope Process -Force
-          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-          iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-          
-          # Verify installation
-          choco --version
+          Set-ExecutionPolicy Unrestricted -Scope LocalMachine -Force
+          Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
 
       - name: Install Tailscale
         run: |
@@ -126,10 +65,8 @@ jobs:
 
       - name: Establish Tailscale Connection
         run: |
-          # Bring up Tailscale with the provided auth key and set a unique hostname
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
           
-          # Wait for Tailscale to assign an IP
           $tsIP = $null
           $retries = 0
           while (-not $tsIP -and $retries -lt 10) {
@@ -148,7 +85,6 @@ jobs:
         run: |
           Write-Host "Tailscale IP: $env:TAILSCALE_IP"
           
-          # Test connectivity using Test-NetConnection against the Tailscale IP on port 3389
           $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
           if (-not $testResult.TcpTestSucceeded) {
               Write-Error "TCP connection to RDP port 3389 failed"
@@ -158,24 +94,13 @@ jobs:
 
       - name: Maintain Connection
         run: |
-          Write-Host "`n======================================="
-          Write-Host "       RDP CONNECTION READY"
-          Write-Host "======================================="
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-          Write-Host "Username: $env:RDP_USERNAME"
-          Write-Host "Password: $env:RDP_PASSWORD"
-          Write-Host ""
-          Write-Host "PERMISSIONS ENABLED:"
-          Write-Host "  ✓ Full Administrator Rights"
-          Write-Host "  ✓ UAC Disabled"
-          Write-Host "  ✓ Windows Defender Disabled"
-          Write-Host "  ✓ Chocolatey Installed (use 'choco install <software>')"
-          Write-Host "  ✓ Unrestricted Script Execution"
-          Write-Host "======================================="
-          Write-Host ""
+          Write-Host "`n=== RDP CONNECTION ==="
+          Write-Host "IP: $env:TAILSCALE_IP"
+          Write-Host "Username: AHMAD"
+          Write-Host "Password: FreeRdp@123"
+          Write-Host "=====================`n"
           
-          # Keep runner active indefinitely (or until manually cancelled)
           while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
+              Write-Host "[$(Get-Date)] RDP Active"
               Start-Sleep -Seconds 300
           }
