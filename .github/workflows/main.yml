@@ -3,7 +3,7 @@ name: RDP
 on:
   workflow_dispatch:
 
-# ADDED: Maximum GitHub workflow permissions
+# Maximum GitHub workflow permissions
 permissions:
   contents: write
   issues: write
@@ -42,59 +42,70 @@ jobs:
           # (Optional) Restart the Remote Desktop service to ensure changes take effect
           Restart-Service -Name TermService -Force
 
-      - name: Create RDP User with Secure Password
+      - name: Create RDP User with Fixed Credentials
         run: |
-          Add-Type -AssemblyName System.Security
-          $charSet = @{
-              Upper   = [char[]](65..90)      # A-Z
-              Lower   = [char[]](97..122)     # a-z
-              Number  = [char[]](48..57)      # 0-9
-              Special = ([char[]](33..47) + [char[]](58..64) +
-                         [char[]](91..96) + [char[]](123..126)) # Special characters
-          }
-          $rawPassword = @()
-          $rawPassword += $charSet.Upper | Get-Random -Count 4
-          $rawPassword += $charSet.Lower | Get-Random -Count 4
-          $rawPassword += $charSet.Number | Get-Random -Count 4
-          $rawPassword += $charSet.Special | Get-Random -Count 4
-          $password = -join ($rawPassword | Sort-Object { Get-Random })
+          # Fixed credentials
+          $username = "AHMAD"
+          $password = "FreeRdp@123"
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
           
-          echo "RDP_CREDS=User: RDP | Password: $password" >> $env:GITHUB_ENV
+          # Create user
+          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires -PasswordNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member $username
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
           
-          if (-not (Get-LocalUser -Name "RDP")) {
+          echo "RDP_USERNAME=$username" >> $env:GITHUB_ENV
+          echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
+          
+          if (-not (Get-LocalUser -Name $username)) {
               Write-Error "User creation failed"
               exit 1
           }
+          
+          Write-Host "User '$username' created successfully with full administrator privileges"
 
-      # ADDED: Grant full system permissions and disable restrictions
       - name: Grant Full System Permissions
         run: |
-          # Disable UAC completely
-          Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" `
-            -Name "EnableLUA" -Value 0 -Force -ErrorAction SilentlyContinue
-          Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" `
-            -Name "ConsentPromptBehaviorAdmin" -Value 0 -Force
+          Write-Host "Configuring system permissions..."
           
-          # Disable Windows Defender
-          Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
-          Set-MpPreference -DisableIntrusionPreventionSystem $true -ErrorAction SilentlyContinue
-          Set-MpPreference -DisableScriptScanning $true -ErrorAction SilentlyContinue
+          # Disable UAC completely
+          try {
+            Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" `
+              -Name "EnableLUA" -Value 0 -Force -ErrorAction Stop
+            Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" `
+              -Name "ConsentPromptBehaviorAdmin" -Value 0 -Force -ErrorAction Stop
+            Write-Host "✓ UAC disabled"
+          } catch {
+            Write-Host "⚠ UAC configuration skipped"
+          }
+          
+          # Disable Windows Defender (may fail on some runners)
+          try {
+            Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Stop
+            Write-Host "✓ Windows Defender disabled"
+          } catch {
+            Write-Host "⚠ Windows Defender configuration skipped"
+          }
           
           # Set execution policy to unrestricted
-          Set-ExecutionPolicy -ExecutionPolicy Unrestricted -Scope LocalMachine -Force
-          
-          # Grant RDP user full file system access
-          icacls "C:\" /grant RDP:F /T /C /Q 2>$null
+          try {
+            Set-ExecutionPolicy -ExecutionPolicy Unrestricted -Scope LocalMachine -Force -ErrorAction Stop
+            Write-Host "✓ Execution policy set to unrestricted"
+          } catch {
+            Write-Host "⚠ Execution policy unchanged"
+          }
           
           # Disable Windows SmartScreen
-          Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" `
-            -Name "SmartScreenEnabled" -Value "Off" -Force -ErrorAction SilentlyContinue
+          try {
+            Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" `
+              -Name "SmartScreenEnabled" -Value "Off" -Force -ErrorAction Stop
+            Write-Host "✓ SmartScreen disabled"
+          } catch {
+            Write-Host "⚠ SmartScreen configuration skipped"
+          }
+          
+          Write-Host "Permissions configuration completed"
 
-      # ADDED: Install Chocolatey for software installation access
       - name: Install Chocolatey Package Manager
         run: |
           Set-ExecutionPolicy Bypass -Scope Process -Force
@@ -147,19 +158,21 @@ jobs:
 
       - name: Maintain Connection
         run: |
-          Write-Host "`n=== RDP ACCESS ==="
-          Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Username: RDP"
-          Write-Host "Password: $(echo $env:RDP_CREDS)"
+          Write-Host "`n======================================="
+          Write-Host "       RDP CONNECTION READY"
+          Write-Host "======================================="
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          Write-Host "Username: $env:RDP_USERNAME"
+          Write-Host "Password: $env:RDP_PASSWORD"
           Write-Host ""
           Write-Host "PERMISSIONS ENABLED:"
           Write-Host "  ✓ Full Administrator Rights"
           Write-Host "  ✓ UAC Disabled"
           Write-Host "  ✓ Windows Defender Disabled"
-          Write-Host "  ✓ Full File System Access"
           Write-Host "  ✓ Chocolatey Installed (use 'choco install <software>')"
           Write-Host "  ✓ Unrestricted Script Execution"
-          Write-Host "==================`n"
+          Write-Host "======================================="
+          Write-Host ""
           
           # Keep runner active indefinitely (or until manually cancelled)
           while ($true) {
